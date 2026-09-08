@@ -1,4 +1,5 @@
-/* ============ 佩剑训练手账 核心逻辑 ============ */
+/* ============ 佩剑训练手账 v4 核心逻辑 ============ */
+/* v4: 照片存 IndexedDB（大容量），localStorage 只存纯文字（永不超限） */
 (() => {
   'use strict';
 
@@ -11,25 +12,71 @@
     el.textContent = msg;
     el.classList.add('show');
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => el.classList.remove('show'), 2300);
+    toast._t = setTimeout(() => el.classList.remove('show'), 2500);
   }
   function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
-  const _alertedKeys = {};
   function storageSet(k, v) {
-    try {
-      localStorage.setItem(k, v);
-      return true;
-    } catch (e) {
-      // 配额超限（QuotaExceededError）— 提示用户清理旧记录
-      if (!_alertedKeys[k]) {
-        _alertedKeys[k] = true;
-        console.error('[storageSet] 写入失败', k, e.name, e.message);
-        toast('⚠ 存储空间不足！请删除一些旧的带照片记录后重试');
-      }
-      return false;
-    }
+    try { localStorage.setItem(k, v); return true; }
+    catch (e) { console.error('[storageSet] fail', k, e.name); return false; }
   }
   function storageDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
+  // ---------- IndexedDB 照片存储 ----------
+  let _db = null;
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      if (_db) return resolve(_db);
+      const req = indexedDB.open('saber_journal_db', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('photos')) {
+          db.createObjectStore('photos', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (e) => { _db = e.target.result; resolve(_db); };
+      req.onerror = (e) => reject(e.target.error);
+    });
+  }
+  async function dbPutPhoto(id, blob) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('photos', 'readwrite');
+      tx.objectStore('photos').put({ id, blob });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+  async function dbGetPhoto(id) {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('photos', 'readonly');
+      const req = tx.objectStore('photos').get(id);
+      req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function dbDeletePhoto(id) {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction('photos', 'readwrite');
+      tx.objectStore('photos').delete(id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => resolve(false);
+    });
+  }
+  // Blob -> Object URL (for <img src>)
+  function blobToURL(blob) {
+    return URL.createObjectURL(blob);
+  }
+  // Blob -> dataURL (for canvas drawImage / AI upload)
+  function blobToDataURL(blob) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  }
 
   // ---------- 标签 ----------
   const TAGS = {
@@ -47,26 +94,24 @@
   // ---------- 状态 ----------
   let entries = [];
   let currentTag = 'footwork';
-  let photos = [];
+  let photos = [];   // [{ id, url(临时ObjectURL) }]
   let currentFilter = 'all';
   let generating = null;
 
-  const STORE_KEY = 'saber_journal_entries';
+  const STORE_KEY = 'saber_journal_entries_v4';
 
   // ---------- 初始化 ----------
-  function init() {
-    // 清理旧 Service Worker（移除 PWA 离线缓存，避免旧 SW 缓存导致页面不更新）
+  async function init() {
+    // 清理旧 Service Worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(r => {
-          console.log('[SW] 注销旧 Service Worker:', r.scope);
-          r.unregister();
-        });
+        regs.forEach(r => r.unregister());
       }).catch(() => {});
     }
-
+    // 迁移旧数据（如果有）
+    migrateOldEntries();
     loadEntries();
-    console.log('[init] 已加载记录数:', entries.length);
+    console.log('[init] entries:', entries.length);
     bindEvents();
     $('#session-date').value = todayInput();
     renderPhotos();
@@ -74,6 +119,46 @@
     setupReminder();
     maybeShowWeekly();
     updateStats();
+  }
+
+  // 迁移 v3 旧数据（localStorage key 不同）
+  function migrateOldEntries() {
+    const oldKey = 'saber_journal_entries';
+    const oldRaw = storageGet(oldKey);
+    if (!oldRaw) return;
+    try {
+      const oldEntries = JSON.parse(oldRaw);
+      if (!Array.isArray(oldEntries) || !oldEntries.length) return;
+      // 旧数据中的 photos 是 [{ dataUrl }]，迁移到 IndexedDB
+      (async () => {
+        for (const e of oldEntries) {
+          if (e.photos && e.photos.length) {
+            const newPhotoIds = [];
+            for (const p of e.photos) {
+              if (p.dataUrl) {
+                const pid = 'p' + Date.now() + Math.random().toString(36).slice(2, 6);
+                // dataUrl -> Blob -> IndexedDB
+                try {
+                  const resp = await fetch(p.dataUrl);
+                  const blob = await resp.blob();
+                  await dbPutPhoto(pid, blob);
+                  newPhotoIds.push(pid);
+                } catch (err) { console.error('[migrate] photo fail', err); }
+              }
+            }
+            e.photos = newPhotoIds; // 只存 ID
+          }
+        }
+        entries = oldEntries;
+        const ok = storageSet(STORE_KEY, JSON.stringify(entries));
+        if (ok) {
+          storageDel(oldKey);
+          console.log('[migrate] done, migrated', oldEntries.length, 'entries');
+          renderReview();
+          updateStats();
+        }
+      })();
+    } catch (e) { console.error('[migrate] fail', e); }
   }
 
   // ---------- 事件绑定 ----------
@@ -144,33 +229,68 @@
     } catch (e) { entries = []; }
   }
   function saveEntries() {
+    // entries 中 photos 只存 ID 数组，不含 base64，localStorage 不会超限
     const ok = storageSet(STORE_KEY, JSON.stringify(entries));
-    if (!ok) {
-      console.error('[saveEntries] 保存到 localStorage 失败，entries 数量为', entries.length);
-    }
+    if (!ok) console.error('[saveEntries] localStorage write failed');
     return ok;
   }
 
-  // ---------- 图片 ----------
-  function handleFiles(list) {
-    if (!list || !list.length) return;
-    let pending = 0;
-    Array.from(list).forEach(file => {
-      if (!file.type.startsWith('image/')) return;
-      pending++;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const id = 'p' + Date.now() + Math.random().toString(36).slice(2, 6);
-        photos.push({ id, dataUrl: ev.target.result });
-        if (photos.length > 9) photos = photos.slice(-9);
-        renderPhotos();
-        pending--;
-        if (pending === 0) toast('已添加 ' + photos.length + ' 张照片');
+  // ---------- 图片处理 ----------
+  // 压缩图片到最长边 1200px，输出 JPEG blob
+  function compressToBlob(dataUrl, maxSide) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width, h = img.height;
+        if (w > maxSide || h > maxSide) {
+          if (w > h) { h = Math.round(h * maxSide / w); w = maxSide; }
+          else { w = Math.round(w * maxSide / h); h = maxSide; }
+        }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const cx = c.getContext('2d');
+        cx.drawImage(img, 0, 0, w, h);
+        c.toBlob(blob => resolve(blob), 'image/jpeg', 0.82);
       };
-      reader.onerror = () => { toast('图片读取失败，请重试'); pending--; };
-      reader.readAsDataURL(file);
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
     });
-    if (pending === 0) toast('未选择有效的图片');
+  }
+
+  async function handleFiles(list) {
+    if (!list || !list.length) return;
+    let count = 0;
+    for (const file of Array.from(list)) {
+      if (!file.type.startsWith('image/')) continue;
+      try {
+        // file -> dataUrl (用于压缩) -> blob (存 IndexedDB)
+        const dataUrl = await new Promise(res => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result);
+          reader.onerror = () => res(null);
+          reader.readAsDataURL(file);
+        });
+        if (!dataUrl) continue;
+        const blob = await compressToBlob(dataUrl, 1200);
+        if (!blob) continue;
+        const id = 'p' + Date.now() + Math.random().toString(36).slice(2, 6);
+        await dbPutPhoto(id, blob);
+        const url = URL.createObjectURL(blob);
+        photos.push({ id, url });
+        if (photos.length > 9) {
+          // 删除多余的照片
+          const removed = photos.shift();
+          if (removed && removed.url) URL.revokeObjectURL(removed.url);
+          await dbDeletePhoto(removed.id).catch(() => {});
+        }
+        count++;
+      } catch (err) {
+        console.error('[handleFiles] error', err);
+      }
+    }
+    renderPhotos();
+    if (count > 0) toast('已添加 ' + count + ' 张照片（共 ' + photos.length + ' 张）');
+    else toast('未选择有效的图片');
   }
 
   function renderPhotos() {
@@ -185,7 +305,7 @@
       html += '<div class="photo-grid">';
       html += photos.map(p => `
         <div class="thumb" data-id="${p.id}">
-          <img src="${p.dataUrl}" alt="训练照片">
+          <img src="${p.url}" alt="训练照片">
           <button class="del" data-id="${p.id}">✕</button>
         </div>`).join('');
       html += '</div>';
@@ -193,7 +313,10 @@
       preview.querySelectorAll('.del').forEach(d => {
         d.addEventListener('click', ev => {
           ev.stopPropagation();
+          const target = photos.find(p => p.id === d.dataset.id);
+          if (target && target.url) URL.revokeObjectURL(target.url);
           photos = photos.filter(p => p.id !== d.dataset.id);
+          dbDeletePhoto(d.dataset.id).catch(() => {});
           renderPhotos();
           if (photos.length === 0) toast('已清空，可重新选图');
         });
@@ -228,31 +351,34 @@
       tag: currentTag,
       coach,
       mind,
-      photos: photos.map(p => ({ dataUrl: p.dataUrl })),
+      // 只存照片 ID，base64 数据在 IndexedDB
+      photoIds: photos.map(p => p.id),
       time: Date.now(),
     };
     entries.unshift(entry);
-    const saved = saveEntries();
+    const ok = saveEntries();
 
-    // 保存验证：立即从 localStorage 重新读取，确认数据真的写进去了
+    // 保存验证
     let verified = false;
     try {
       const raw = localStorage.getItem(STORE_KEY);
       const reloaded = raw ? JSON.parse(raw) : [];
       verified = Array.isArray(reloaded) && reloaded.some(e => e.id === entry.id);
-      console.log('[handleSaveEntry] 保存验证', { saved, verified, totalInStorage: reloaded.length });
+      console.log('[handleSaveEntry] verified:', verified, 'total:', reloaded.length);
     } catch (e) {
-      console.error('[handleSaveEntry] 验证读取失败', e);
+      console.error('[handleSaveEntry] verify fail', e);
     }
 
     if (!verified) {
-      // 回滚内存中的 entry，避免内存与存储不一致
       entries = entries.filter(e => e.id !== entry.id);
-      toast('⚠ 保存失败！存储空间可能已满，请删除一些旧记录后重试');
+      // 清理刚存到 IndexedDB 的照片
+      photos.forEach(p => dbDeletePhoto(p.id).catch(() => {}));
+      toast('⚠ 保存失败！请重试');
       return;
     }
 
-    renderReview();
+    // 清空编辑区（照片 ObjectURL 需要保留，因为 photos 数组清空但 IndexedDB 中已存好）
+    for (const p of photos) { if (p.url) URL.revokeObjectURL(p.url); }
     $('#coach-input').value = ''; $('#coach-count').textContent = '0 / 500';
     $('#mind-input').value = ''; $('#mind-count').textContent = '0 / 500';
     $('#session-title').value = '';
@@ -289,7 +415,7 @@
     return entries.filter(e => e.tag === currentFilter);
   }
 
-  function renderReview() {
+  async function renderReview() {
     const list = $('#review-list');
     const empty = $('#empty-review');
     const filtered = getFiltered();
@@ -299,7 +425,11 @@
       return;
     }
     empty.style.display = 'none';
-    list.innerHTML = filtered.map(e => `
+
+    // 先渲染文字部分（不阻塞）
+    list.innerHTML = filtered.map(e => {
+      const photoCount = (e.photoIds && e.photoIds.length) || (e.photos && e.photos.length) || 0;
+      return `
       <div class="review-item" data-id="${e.id}">
         <div class="ri-head">
           <span class="ri-date">${fmtDate(e.date)}${e.week ? ' · 第' + e.week + '周' : ''}</span>
@@ -310,8 +440,37 @@
           ${e.coach ? `<div class="sec"><span class="sec-label">🎓 老师要点：</span>${escapeHtml(e.coach)}</div>` : ''}
           ${e.mind ? `<div class="sec"><span class="sec-label">⚔ 实战心得：</span>${escapeHtml(e.mind)}</div>` : ''}
         </div>
-        ${e.photos && e.photos.length ? `<div class="ri-photos">${e.photos.map(p => `<img src="${p.dataUrl}" alt="照片">`).join('')}</div>` : ''}
-      </div>`).join('');
+        <div class="ri-photos" data-entry="${e.id}">${photoCount ? '<span style="font-size:12px;color:var(--ink-soft)">📷 ' + photoCount + ' 张照片加载中…</span>' : ''}</div>
+      </div>`;
+    }).join('');
+
+    // 异步加载照片缩略图
+    for (const e of filtered) {
+      const ids = e.photoIds || (e.photos && e.photos.map(p => null).filter(() => false)) || [];
+      // 兼容旧数据：如果有 photos 数组（含 dataUrl），直接用
+      if (e.photos && e.photos.length && !e.photoIds) {
+        const container = list.querySelector(`.ri-photos[data-entry="${e.id}"]`);
+        if (container) container.innerHTML = e.photos.map(p => `<img src="${p.dataUrl}" alt="照片">`).join('');
+        continue;
+      }
+      if (!ids.length) continue;
+      const container = list.querySelector(`.ri-photos[data-entry="${e.id}"]`);
+      if (!container) continue;
+      const imgs = [];
+      for (const pid of ids) {
+        try {
+          const blob = await dbGetPhoto(pid);
+          if (blob) imgs.push(blobToURL(blob));
+        } catch (err) {}
+      }
+      if (imgs.length) {
+        container.innerHTML = imgs.map(u => `<img src="${u}" alt="照片">`).join('');
+      } else {
+        container.innerHTML = '';
+      }
+    }
+
+    // 绑定点击事件
     list.querySelectorAll('.review-item').forEach(item => {
       item.addEventListener('click', () => previewEntry(item.dataset.id));
     });
@@ -434,7 +593,14 @@
     const key = loadKey();
     if (!key) throw Object.assign(new Error('未设置AI Key'), { noKey: true });
     const content = [{ type: 'text', text: promptText }];
-    photos.forEach(p => content.push({ type: 'image_url', image_url: { url: p.dataUrl } }));
+    // 从 IndexedDB 加载照片转 dataURL 发给 AI
+    for (const p of photos) {
+      const blob = await dbGetPhoto(p.id);
+      if (blob) {
+        const dataUrl = await blobToDataURL(blob);
+        if (dataUrl) content.push({ type: 'image_url', image_url: { url: dataUrl } });
+      }
+    }
 
     const resp = await fetch(ARK_ENDPOINT, {
       method: 'POST',
@@ -504,24 +670,6 @@ ${text || '（无）'}
       img.src = src;
     });
   }
-  function compressImage(dataUrl, maxSide) {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        let w = img.width, h = img.height;
-        if (w <= maxSide && h <= maxSide) { resolve(dataUrl); return; }
-        if (w > h) { h = Math.round(h * maxSide / w); w = maxSide; }
-        else { w = Math.round(w * maxSide / h); h = maxSide; }
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        const cx = c.getContext('2d');
-        cx.drawImage(img, 0, 0, w, h);
-        resolve(c.toDataURL('image/jpeg', 0.85));
-      };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
-    });
-  }
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath();
     ctx.moveTo(x + r, y);
@@ -553,8 +701,35 @@ ${text || '（无）'}
     if (e.title) h += 36;
     if (e.coach) { h += 6; h += wrap(ctx, '【老师要点】' + e.coach, textW).length * 30; }
     if (e.mind) { h += 6; h += wrap(ctx, '【实战心得】' + e.mind, textW).length * 30; }
-    if (e.photos && e.photos.length) { h += 8; h += Math.min(Math.ceil(e.photos.length / 3), 2) * 108; }
+    const photoCount = (e.photoIds && e.photoIds.length) || (e.photos && e.photos.length) || 0;
+    if (photoCount) { h += 8; h += Math.min(Math.ceil(photoCount / 3), 2) * 108; }
     return h + 14;
+  }
+
+  // 从 IndexedDB 加载照片为 HTMLImageElement
+  async function loadEntryPhotos(entry, maxCount) {
+    const ids = entry.photoIds || [];
+    // 兼容旧数据
+    if (!ids.length && entry.photos && entry.photos.length) {
+      const imgs = [];
+      for (const p of entry.photos.slice(0, maxCount)) {
+        if (p.dataUrl) { try { imgs.push(await loadImage(p.dataUrl)); } catch (e) {} }
+      }
+      return imgs;
+    }
+    const imgs = [];
+    for (const pid of ids.slice(0, maxCount)) {
+      try {
+        const blob = await dbGetPhoto(pid);
+        if (blob) {
+          const url = URL.createObjectURL(blob);
+          const img = await loadImage(url);
+          imgs.push(img);
+          // URL 会在页面关闭时自动释放
+        }
+      } catch (e) {}
+    }
+    return imgs;
   }
 
   // 汇总卡片（当前筛选）
@@ -646,11 +821,7 @@ ${text || '（无）'}
     if (entry.coach) sections.push({ text: '【老师要点】' + entry.coach, bold: false, color: '#EAF1FA', size: 24 });
     if (entry.mind) sections.push({ text: '【实战心得】' + entry.mind, bold: false, color: '#EAF1FA', size: 24 });
 
-    const photos = entry.photos || [];
-    const imgs = [];
-    for (const p of photos.slice(0, 3)) {
-      try { imgs.push(await loadImage(p.dataUrl)); } catch (e) {}
-    }
+    const imgs = await loadEntryPhotos(entry, 3);
 
     let bodyH = 0;
     for (const s of sections) {
@@ -751,7 +922,9 @@ ${text || '（无）'}
 
   function showPreview() {
     if (!generating || !generating.dataUrl) { toast('没有可预览的卡片'); return; }
-    $('#journal-canvas').innerHTML = '<img src="' + generating.dataUrl + '" alt="复习卡片" style="width:100%;height:auto;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.4);">';
+    $('#journal-canvas').innerHTML =
+      '<img src="' + generating.dataUrl + '" alt="复习卡片" class="preview-img">'
+      + '<p class="save-tip">👆 长按图片保存到相册</p>';
     $('#screen-review').classList.remove('active');
     $('#screen-preview').classList.add('active');
     window.scrollTo(0, 0);
@@ -759,11 +932,15 @@ ${text || '（无）'}
 
   function handleSave() {
     if (!generating) { toast('请先生成卡片'); return; }
+    // 先尝试 download（Android 有效），失败则提示长按
     const a = document.createElement('a');
     a.href = generating.dataUrl;
-    a.download = '佩剑复习卡_' + Date.now() + '.png';
+    a.download = 'saber_card_' + Date.now() + '.png';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    toast('已保存到相册/下载 📂');
+    // 同时显示提示（iOS 需要 long-press）
+    const tip = $('#journal-canvas').querySelector('.save-tip');
+    if (tip) tip.textContent = '如未弹出保存，请长按上方图片 → "保存到相册"';
+    toast('已触发下载，若未弹出请长按图片保存');
   }
 
   function handleDelete() {
@@ -776,11 +953,6 @@ ${text || '（无）'}
   }
 
   // ---------- 日期 ----------
-  function todayStr() {
-    const d = new Date();
-    const p = n => (n < 10 ? '0' : '') + n;
-    return d.getFullYear() + '·' + p(d.getMonth() + 1) + '·' + p(d.getDate());
-  }
   function todayInput() {
     const d = new Date();
     const p = n => (n < 10 ? '0' : '') + n;

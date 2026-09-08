@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="佩剑手账">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/style.css?v=3">
+  <link rel="stylesheet" href="css/style.css?v=4">
 </head>
 <body>
   <!-- 顶部栏 -->
@@ -140,8 +140,8 @@
         <div class="journal-canvas" id="journal-canvas"></div>
       </div>
       <div class="preview-actions">
-        <button id="btn-save" class="btn btn-primary">💾 保存到相册</button>
-        <button id="btn-delete" class="btn btn-danger">🗑 删除这页</button>
+        <button id="btn-save" class="btn btn-primary">💾 保存图片</button>
+        <button id="btn-delete" class="btn btn-danger">🗑 关闭卡片</button>
         <button id="btn-back" class="btn btn-ghost">← 返回</button>
       </div>
     </section>
@@ -175,9 +175,8 @@
   <div id="toast" class="toast"></div>
 
   <script>
-    // v3: 不再注册 Service Worker，仅在初始化时清理旧 SW
-    // app.js init() 中会执行 navigator.serviceWorker.getRegistrations().then(unregister)
+    // v4: IndexedDB for photos, no Service Worker
   </script>
-  <script src="js/app.js?v=3"></script>
+  <script src="js/app.js?v=4"></script>
 </body>
 </html>

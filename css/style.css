@@ -215,6 +215,18 @@ body { padding-bottom: 24px; }
 /* ---- 预览屏 ---- */
 .preview-wrap { display: flex; justify-content: center; padding: 8px 0 16px; }
 .journal-canvas { max-width: 100%; }
+.journal-canvas .preview-img {
+  width: 100%; height: auto; border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  -webkit-touch-callout: default;
+  -webkit-user-select: auto;
+  user-select: auto;
+}
+.journal-canvas .save-tip {
+  text-align: center; font-size: 13px; color: var(--gold);
+  margin-top: 12px; padding: 8px; background: var(--gold-soft);
+  border-radius: 10px; line-height: 1.5;
+}
 .preview-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 
 /* ---- 设置弹层 ---- */
