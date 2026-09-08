@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>佩剑训练手账</title>
+  <meta name="description" content="记录每周佩剑训练要点与实战心得，训练前随时复习。">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#0E1A2B">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="佩剑手账">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- 顶部栏 -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">⚔</span>
+      <div>
+        <h1>佩剑训练手账</h1>
+        <p class="brand-sub">记录要点 · 实战心得 · 随时复习</p>
+      </div>
+    </div>
+    <button id="btn-settings" class="icon-btn" aria-label="设置" title="设置">⚙️</button>
+  </header>
+
+  <main class="app">
+    <!-- ========== 第一屏：记录编辑 ========== -->
+    <section id="screen-edit" class="screen active">
+      <!-- 训练信息卡 -->
+      <div class="session-card">
+        <div class="session-row">
+          <div class="session-date">
+            <span class="s-label">训练日期</span>
+            <input type="date" id="session-date">
+          </div>
+          <div class="session-week">
+            <span class="s-label">第几周</span>
+            <input type="number" id="session-week" min="1" max="99" placeholder="如 12">
+          </div>
+        </div>
+        <div class="session-row">
+          <span class="s-label">本课主题</span>
+          <input type="text" id="session-title" placeholder="如：弓步进攻的时机" maxlength="30">
+        </div>
+      </div>
+
+      <!-- 标签 -->
+      <div class="tag-group">
+        <span class="tag-label">内容标签</span>
+        <div class="tag-tabs" id="tag-tabs">
+          <button class="tag-tab" data-tag="footwork">🦶 步伐</button>
+          <button class="tag-tab" data-tag="attack">⚡ 进攻/时机</button>
+          <button class="tag-tab" data-tag="defense">🛡 防守</button>
+          <button class="tag-tab" data-tag="mind">🧠 心态</button>
+          <button class="tag-tab" data-tag="skill">📌 要领/口诀</button>
+        </div>
+      </div>
+
+      <!-- 老师讲解要点 -->
+      <div class="input-card">
+        <div class="card-head">
+          <span class="card-title">🎓 老师讲解要点</span>
+          <span class="char-count" id="coach-count">0 / 500</span>
+        </div>
+        <textarea id="coach-input" placeholder="老师这节课讲了什么关键内容？动作要领、技术细节、纠正的问题……"></textarea>
+      </div>
+
+      <!-- 我的实战心得 -->
+      <div class="input-card">
+        <div class="card-head">
+          <span class="card-title">✍ 我的实战心得</span>
+          <span class="char-count" id="mind-count">0 / 500</span>
+        </div>
+        <textarea id="mind-input" placeholder="实战对练中的体会：哪些做得好？哪里失误了？下次怎么改进？"></textarea>
+      </div>
+
+      <!-- 照片（可选） -->
+      <div class="photo-zone" id="photo-zone">
+        <input type="file" id="file-input" accept="image/*" hidden multiple>
+        <div class="photo-preview" id="photo-preview"></div>
+        <div class="photo-hint" id="photo-hint">
+          <span class="hint-ico">📷</span>
+          <span>拍照或选图</span>
+          <small>可添加动作示范、白板板书等（选填）</small>
+        </div>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="action-bar">
+        <button id="btn-ai" class="btn btn-primary">✨ AI 润色</button>
+        <button id="btn-save-entry" class="btn btn-accent">💾 保存记录</button>
+      </div>
+      <button id="btn-review" class="btn btn-ghost-wide">📖 进入复习</button>
+    </section>
+
+    <!-- ========== 第二屏：复习 ========== -->
+    <section id="screen-review" class="screen">
+      <div class="review-head">
+        <h2 class="screen-title">复习</h2>
+        <button id="btn-back-edit" class="icon-btn">✎</button>
+      </div>
+
+      <!-- 本周回顾卡（自动弹出提示） -->
+      <div class="week-card" id="week-card" style="display:none;">
+        <div class="week-card-title">📋 本周重点回顾</div>
+        <div id="week-content"></div>
+      </div>
+
+      <!-- 标签筛选 -->
+      <div class="filter-tabs" id="filter-tabs">
+        <button class="filter-tab active" data-filter="all">全部</button>
+        <button class="filter-tab" data-filter="footwork">🦶 步伐</button>
+        <button class="filter-tab" data-filter="attack">⚡ 进攻/时机</button>
+        <button class="filter-tab" data-filter="defense">🛡 防守</button>
+        <button class="filter-tab" data-filter="mind">🧠 心态</button>
+        <button class="filter-tab" data-filter="skill">📌 要领/口诀</button>
+      </div>
+
+      <!-- 复习列表 -->
+      <div class="review-list" id="review-list"></div>
+      <p class="empty-history" id="empty-review">还没有训练记录，先去记一笔吧 ⚔️</p>
+
+      <!-- 生成长图 -->
+      <div class="review-actions">
+        <button id="btn-make-card" class="btn btn-accent">🖼 生成复习卡片</button>
+      </div>
+    </section>
+
+    <!-- ========== 第三屏：长图预览 ========== -->
+    <section id="screen-preview" class="screen">
+      <div class="preview-wrap">
+        <div class="journal-canvas" id="journal-canvas"></div>
+      </div>
+      <div class="preview-actions">
+        <button id="btn-save" class="btn btn-primary">💾 保存到相册</button>
+        <button id="btn-delete" class="btn btn-danger">🗑 删除这页</button>
+        <button id="btn-back" class="btn btn-ghost">← 返回</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- 设置弹层 -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3>⚙️ 设置</h3>
+        <button class="icon-btn" id="modal-close">✕</button>
+      </div>
+
+      <label class="field-label">AI 服务（火山引擎豆包）</label>
+      <input type="password" id="api-key" placeholder="粘贴你的 API Key" autocomplete="off">
+      <p class="field-help">Key 仅保存在本机浏览器，不会上传到任何服务器。用于 AI 润色心得。</p>
+
+      <label class="field-label">训练提醒时间</label>
+      <div class="remind-row">
+        <input type="time" id="remind-time" value="19:00">
+        <button id="btn-enable-remind" class="btn btn-primary btn-small">开启提醒</button>
+        <button id="btn-disable-remind" class="btn btn-ghost btn-small">关闭</button>
+      </div>
+      <p class="field-help" id="remind-status">提醒未开启</p>
+
+      <button id="btn-save-settings" class="btn btn-primary btn-block">保存设置</button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+  </script>
+  <script src="js/app.js"></script>
+</body>
+</html>
