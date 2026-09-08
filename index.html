@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-title" content="佩剑手账">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="icon" href="icons/icon-192.png">
-  <link rel="stylesheet" href="css/style.css?v=2">
+  <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
   <!-- 顶部栏 -->
@@ -175,10 +175,9 @@
   <div id="toast" class="toast"></div>
 
   <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
-    }
+    // v3: 不再注册 Service Worker，仅在初始化时清理旧 SW
+    // app.js init() 中会执行 navigator.serviceWorker.getRegistrations().then(unregister)
   </script>
-  <script src="js/app.js?v=2"></script>
+  <script src="js/app.js?v=3"></script>
 </body>
 </html>

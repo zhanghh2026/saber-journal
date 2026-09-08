@@ -14,7 +14,21 @@
     toast._t = setTimeout(() => el.classList.remove('show'), 2300);
   }
   function storageGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
-  function storageSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  const _alertedKeys = {};
+  function storageSet(k, v) {
+    try {
+      localStorage.setItem(k, v);
+      return true;
+    } catch (e) {
+      // 配额超限（QuotaExceededError）— 提示用户清理旧记录
+      if (!_alertedKeys[k]) {
+        _alertedKeys[k] = true;
+        console.error('[storageSet] 写入失败', k, e.name, e.message);
+        toast('⚠ 存储空间不足！请删除一些旧的带照片记录后重试');
+      }
+      return false;
+    }
+  }
   function storageDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
 
   // ---------- 标签 ----------
@@ -41,7 +55,18 @@
 
   // ---------- 初始化 ----------
   function init() {
+    // 清理旧 Service Worker（移除 PWA 离线缓存，避免旧 SW 缓存导致页面不更新）
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(r => {
+          console.log('[SW] 注销旧 Service Worker:', r.scope);
+          r.unregister();
+        });
+      }).catch(() => {});
+    }
+
     loadEntries();
+    console.log('[init] 已加载记录数:', entries.length);
     bindEvents();
     $('#session-date').value = todayInput();
     renderPhotos();
@@ -113,10 +138,18 @@
 
   // ---------- 数据 ----------
   function loadEntries() {
-    try { entries = JSON.parse(storageGet(STORE_KEY) || '[]'); }
-    catch (e) { entries = []; }
+    try {
+      entries = JSON.parse(storageGet(STORE_KEY) || '[]');
+      if (!Array.isArray(entries)) entries = [];
+    } catch (e) { entries = []; }
   }
-  function saveEntries() { storageSet(STORE_KEY, JSON.stringify(entries)); }
+  function saveEntries() {
+    const ok = storageSet(STORE_KEY, JSON.stringify(entries));
+    if (!ok) {
+      console.error('[saveEntries] 保存到 localStorage 失败，entries 数量为', entries.length);
+    }
+    return ok;
+  }
 
   // ---------- 图片 ----------
   function handleFiles(list) {
@@ -199,7 +232,26 @@
       time: Date.now(),
     };
     entries.unshift(entry);
-    saveEntries();
+    const saved = saveEntries();
+
+    // 保存验证：立即从 localStorage 重新读取，确认数据真的写进去了
+    let verified = false;
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      const reloaded = raw ? JSON.parse(raw) : [];
+      verified = Array.isArray(reloaded) && reloaded.some(e => e.id === entry.id);
+      console.log('[handleSaveEntry] 保存验证', { saved, verified, totalInStorage: reloaded.length });
+    } catch (e) {
+      console.error('[handleSaveEntry] 验证读取失败', e);
+    }
+
+    if (!verified) {
+      // 回滚内存中的 entry，避免内存与存储不一致
+      entries = entries.filter(e => e.id !== entry.id);
+      toast('⚠ 保存失败！存储空间可能已满，请删除一些旧记录后重试');
+      return;
+    }
+
     renderReview();
     $('#coach-input').value = ''; $('#coach-count').textContent = '0 / 500';
     $('#mind-input').value = ''; $('#mind-count').textContent = '0 / 500';

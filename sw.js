@@ -1,48 +1,37 @@
-/* 佩剑训练手账 Service Worker - network-first + 离线回退 */
-const CACHE = 'sabre-journal-v2';
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.json',
-  './css/style.css',
-  './js/app.js',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
-];
+/* 佩剑训练手账 Service Worker - v3 自我注销兜底 */
+/* 此版本不缓存任何内容，加载后立即注销自己并清理所有缓存 */
+/* 目的：清除手机上残留的旧版 SW，避免缓存导致页面不更新 */
 
-// 安装：预缓存 + 立即激活
-self.addEventListener('install', e => {
+const CACHE_PREFIX = 'sabre-journal';
+
+self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting())
+    Promise.all([
+      // 清理所有相关缓存
+      caches.keys().then(keys =>
+        Promise.all(keys.filter(k => k.includes(CACHE_PREFIX)).map(k => caches.delete(k)))
+      ),
+      // 立即跳过等待
+      self.skipWaiting()
+    ])
   );
 });
 
-// 激活：清理旧缓存 + 立即接管
-self.addEventListener('activate', e => {
+self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim())
-      .then(() => self.clients.matchAll().then(clients => clients.forEach(c => c.navigate(c.url))))
+    Promise.all([
+      // 再次清理所有缓存
+      caches.keys().then(keys =>
+        Promise.all(keys.filter(k => k.includes(CACHE_PREFIX)).map(k => caches.delete(k)))
+      ),
+      self.clients.claim(),
+      // 通知所有客户端刷新
+      self.clients.matchAll().then(clients =>
+        clients.forEach(c => c.navigate(c.url))
+      )
+    ])
   );
 });
 
-// fetch：network-first（优先拿最新版本，离线时才用缓存）
-self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    fetch(e.request)
-      .then(resp => {
-        // 成功拿到网络响应，更新缓存
-        if (resp && resp.ok && resp.type === 'basic') {
-          const clone = resp.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return resp;
-      })
-      .catch(() => {
-        // 网络失败，回退到缓存
-        return caches.match(e.request).then(cached => cached || caches.match('./index.html'));
-      })
-  );
-});
+// 不拦截任何 fetch 请求，全部透传
+self.addEventListener('fetch', () => {});
