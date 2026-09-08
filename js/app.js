@@ -48,6 +48,7 @@
     renderReview();
     setupReminder();
     maybeShowWeekly();
+    updateStats();
   }
 
   // ---------- 事件绑定 ----------
@@ -207,6 +208,7 @@
     photos = [];
     renderPhotos();
     toast('训练记录已保存 ⚔️');
+    updateStats();
     goReview();
   }
 
@@ -221,6 +223,7 @@
   function goEdit() {
     $('#screen-review').classList.remove('active');
     $('#screen-edit').classList.add('active');
+    updateStats();
     window.scrollTo(0, 0);
   }
 
@@ -273,6 +276,14 @@
       const d = new Date(e.date + 'T00:00:00');
       return d >= monday;
     });
+  }
+
+  function updateStats() {
+    const el = $('#stats-text');
+    if (!el) return;
+    if (!entries.length) { el.textContent = '还没有训练记录'; return; }
+    const weekEntries = getWeekEntries();
+    el.textContent = `共有 ${entries.length} 条训练记录${weekEntries.length ? '（本周 ' + weekEntries.length + ' 条）' : ''} → 点"进入复习"查看`;
   }
 
   function maybeShowWeekly() {

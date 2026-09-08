@@ -161,6 +161,10 @@ body { padding-bottom: 24px; }
 .btn-ghost-wide { width: 100%; border: none; border-radius: 14px; padding: 13px; font-size: 15px; font-weight: 700; cursor: pointer; background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
 .btn-ghost-wide:active { transform: scale(.98); }
 
+/* ---- 记录统计 ---- */
+.entry-stats { text-align: center; margin-bottom: 12px; }
+.entry-stats #stats-text { font-size: 13px; color: var(--ink-soft); }
+
 /* ---- 复习屏 ---- */
 .review-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
 .review-head h2 { font-size: 18px; }
